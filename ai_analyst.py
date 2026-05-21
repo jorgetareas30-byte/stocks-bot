@@ -131,6 +131,17 @@ def format_stock_alert(stock: dict, ai: dict | None) -> str:
             upside = round(((ai["price_target_30d"] / stock["price"]) - 1) * 100, 1)
             lines.append(f"🎯 Target 30d: ${ai['price_target_30d']} ({upside:+.1f}%)")
 
+    # Earnings info
+    earnings = stock.get("earnings", {})
+    if earnings.get("ok") and earnings.get("date"):
+        try:
+            from earnings_calendar import format_earnings_line
+            earn_line = format_earnings_line(earnings)
+            if earn_line:
+                lines.append(earn_line)
+        except Exception:
+            pass
+
     lines.append("")
     lines.append(f"📊 Sector: {stock['sector']} | Cap: ${stock.get('mktcap_b', 'N/A')}B | P/E: {stock.get('pe', 'N/A')}")
     lines.append("⚠️ <i>No es consejo financiero. Gestiona tu riesgo.</i>")

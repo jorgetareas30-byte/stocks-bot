@@ -77,6 +77,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/add AAPL — Agregar al watchlist\n"
         "/remove AAPL — Quitar del watchlist\n"
         "/list — Ver watchlist\n"
+        "/earnings — Próximos earnings del watchlist\n"
         "/help — Esta ayuda",
         parse_mode=ParseMode.HTML,
     )
@@ -186,6 +187,20 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+async def cmd_earnings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show upcoming earnings for the watchlist."""
+    msg = await update.message.reply_text("📅 Consultando earnings calendar...")
+    try:
+        from earnings_calendar import get_earnings_batch, format_earnings_calendar
+        earnings_map = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: get_earnings_batch(_watchlist)
+        )
+        text = format_earnings_calendar(earnings_map)
+        await msg.edit_text(text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {e}")
+
+
 # ─────────────────────────────────────────────────────────────
 # Scheduled jobs
 # ─────────────────────────────────────────────────────────────
@@ -286,7 +301,8 @@ def main():
     app.add_handler(CommandHandler("analyze", cmd_analyze))
     app.add_handler(CommandHandler("add",     cmd_add))
     app.add_handler(CommandHandler("remove",  cmd_remove))
-    app.add_handler(CommandHandler("list",    cmd_list))
+    app.add_handler(CommandHandler("list",     cmd_list))
+    app.add_handler(CommandHandler("earnings", cmd_earnings))
 
     # Scheduled jobs
     jq = app.job_queue

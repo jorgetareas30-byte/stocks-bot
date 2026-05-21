@@ -291,12 +291,25 @@ def scan_stocks(symbols: list, min_score: int = 65) -> list:
         score, direction, reasons = score_stock(data)
         if direction == "NEUTRAL":
             return None
+
+        # Earnings calendar filter — block if earnings too close
+        earnings = {"blocked": False, "ok": False}
+        try:
+            from earnings_calendar import get_next_earnings
+            earnings = get_next_earnings(sym)
+            if earnings.get("blocked"):
+                log.info(f"⛔ {sym} bloqueado — {earnings['reason']}")
+                return None
+        except Exception:
+            pass
+
         levels = calc_levels(data, direction)
         return {
             **data,
             "score":     score,
             "direction": direction,
             "reasons":   reasons,
+            "earnings":  earnings,
             **levels,
         }
 

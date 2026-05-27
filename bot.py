@@ -5,12 +5,16 @@ Bot de Telegram que escanea el mercado de acciones
 usando Yahoo Finance + Claude AI.
 
 Comandos:
-  /scan    — Escanea todo el watchlist ahora
-  /top     — Top 5 oportunidades del momento
-  /analyze AAPL — Analiza un stock específico
-  /add AAPL    — Agrega al watchlist
-  /list        — Ver watchlist actual
-  /help        — Ayuda
+  /scan          — Escanea todo el watchlist ahora
+  /scan SEMIS    — Escanea un grupo específico
+  /top           — Top 5 oportunidades del momento
+  /analyze AAPL  — Analiza un stock específico
+  /compare NVDA AMD — Compara dos stocks con Claude AI
+  /groups        — Ver grupos disponibles del watchlist
+  /add AAPL      — Agrega al watchlist
+  /list          — Ver watchlist actual
+  /earnings      — Próximos earnings del watchlist
+  /help          — Ayuda
 """
 
 import os
@@ -28,7 +32,7 @@ from telegram.constants import ParseMode
 
 import config
 from scanner import scan_stocks, fetch_stock_data, score_stock, calc_levels
-from ai_analyst import analyze_stock_with_claude, format_stock_alert
+from ai_analyst import analyze_stock_with_claude, format_stock_alert, compare_stocks_with_claude, format_compare_result
 
 # ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -72,8 +76,11 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📈 <b>Jorge Stock Scanner</b>\n\n"
         "/scan — Escanear todo el watchlist\n"
+        "/scan SEMIS — Escanear un grupo (AI, SEMIS, BIGTECH…)\n"
         "/top — Top 5 oportunidades ahora\n"
         "/analyze AAPL — Analizar un stock\n"
+        "/compare NVDA AMD — Comparar dos stocks con Claude AI\n"
+        "/groups — Ver grupos del watchlist\n"
         "/add AAPL — Agregar al watchlist\n"
         "/remove AAPL — Quitar del watchlist\n"
         "/list — Ver watchlist\n"
@@ -84,11 +91,32 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Support /scan SECTOR — scan a specific group
+    group_name = ctx.args[0].upper() if ctx.args else None
+    target_list = _watchlist
+
+    if group_name:
+        groups = config.WATCHLIST_GROUPS
+        if group_name not in groups:
+            available = " · ".join(groups.keys())
+            await update.message.reply_text(
+                f"❌ Grupo <b>{group_name}</b> no existe.\n"
+                f"Grupos disponibles: {available}\n"
+                f"O usa /groups para verlos.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        target_list = groups[group_name]
+        label = f"grupo <b>{group_name}</b> ({len(target_list)} stocks)"
+    else:
+        label = f"<b>{len(target_list)} acciones</b> del watchlist"
+
     msg = await update.message.reply_text(
-        f"🔍 Escaneando {len(_watchlist)} acciones con Claude AI... espera ~30 seg."
+        f"🔍 Escaneando {label} con Claude AI... espera ~30 seg.",
+        parse_mode=ParseMode.HTML,
     )
     results = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: scan_stocks(_watchlist, config.MIN_SCORE)
+        None, lambda: scan_stocks(target_list, config.MIN_SCORE)
     )
 
     if not results:
@@ -104,6 +132,56 @@ async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = format_stock_alert(stock, ai)
         await update.message.reply_text(text, parse_mode=ParseMode.HTML)
         await asyncio.sleep(0.5)
+
+
+async def cmd_groups(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show available watchlist groups."""
+    lines = ["📂 <b>Grupos del Watchlist</b>\n"]
+    for name, tickers in config.WATCHLIST_GROUPS.items():
+        lines.append(f"<b>{name}</b> ({len(tickers)}) — {' · '.join(tickers)}")
+    lines.append("\nUso: /scan AI · /scan SEMIS · /scan BIGTECH")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_compare(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Compare two stocks head-to-head with Claude AI."""
+    if not ctx.args or len(ctx.args) < 2:
+        await update.message.reply_text("Uso: /compare NVDA AMD")
+        return
+
+    sym1 = ctx.args[0].upper().strip()
+    sym2 = ctx.args[1].upper().strip()
+
+    if sym1 == sym2:
+        await update.message.reply_text("❌ Pon dos tickers diferentes.")
+        return
+
+    msg = await update.message.reply_text(f"⚔️ Comparando {sym1} vs {sym2} con Claude AI...")
+
+    loop = asyncio.get_event_loop()
+    data1, data2 = await asyncio.gather(
+        loop.run_in_executor(None, lambda: fetch_stock_data(sym1)),
+        loop.run_in_executor(None, lambda: fetch_stock_data(sym2)),
+    )
+
+    if not data1:
+        await msg.edit_text(f"❌ No pude obtener datos para {sym1}.")
+        return
+    if not data2:
+        await msg.edit_text(f"❌ No pude obtener datos para {sym2}.")
+        return
+
+    score1, dir1, reasons1 = score_stock(data1)
+    score2, dir2, reasons2 = score_stock(data2)
+    levels1 = calc_levels(data1, dir1)
+    levels2 = calc_levels(data2, dir2)
+
+    s1 = {**data1, "score": score1, "direction": dir1, "reasons": reasons1, **levels1}
+    s2 = {**data2, "score": score2, "direction": dir2, "reasons": reasons2, **levels2}
+
+    ai = await loop.run_in_executor(None, lambda: compare_stocks_with_claude(s1, s2))
+    text = format_compare_result(s1, s2, ai)
+    await msg.edit_text(text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -205,6 +283,54 @@ async def cmd_earnings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # Scheduled jobs
 # ─────────────────────────────────────────────────────────────
 
+async def job_earnings_alert(ctx: ContextTypes.DEFAULT_TYPE):
+    """Daily job: warn about earnings happening in exactly 3 days."""
+    chat_id = config.TELEGRAM_CHAT_ID
+    if not chat_id:
+        return
+
+    from datetime import datetime
+    now = datetime.now(ET)
+    if now.weekday() >= 5:  # no correr en fin de semana
+        return
+
+    try:
+        from earnings_calendar import get_earnings_batch
+        earnings_map = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: get_earnings_batch(_watchlist)
+        )
+
+        # Stocks con earnings en 1-3 días
+        upcoming = [
+            (ticker, info) for ticker, info in earnings_map.items()
+            if info.get("ok") and 1 <= info.get("days_away", 999) <= 3
+        ]
+        upcoming.sort(key=lambda x: x[1]["days_away"])
+
+        if not upcoming:
+            return  # Nada próximo, silencio total
+
+        lines = ["⚠️ <b>EARNINGS PRÓXIMOS — ALERTA</b>\n"]
+        lines.append("Las siguientes acciones tienen earnings en ≤3 días.\n"
+                     "Las señales de estos stocks están <b>bloqueadas</b>.\n")
+
+        for ticker, info in upcoming:
+            days = info["days_away"]
+            icon = "🔴" if days == 1 else "🟡" if days == 2 else "🟠"
+            lines.append(f"{icon} <b>{ticker}</b> — en <b>{days}d</b> ({info['date']})")
+
+        lines.append("\n📌 Señales se desbloquean 1 día después del reporte.")
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text="\n".join(lines),
+            parse_mode=ParseMode.HTML,
+        )
+        log.info(f"📅 Earnings alert sent: {[t for t, _ in upcoming]}")
+
+    except Exception as e:
+        log.warning(f"job_earnings_alert error: {e}")
+
+
 async def job_auto_scan(ctx: ContextTypes.DEFAULT_TYPE):
     """Auto-scan every hour during market hours (9:30–16:00 ET)."""
     now_et = asyncio.get_event_loop().time()
@@ -299,9 +425,11 @@ def main():
     app.add_handler(CommandHandler("scan",    cmd_scan))
     app.add_handler(CommandHandler("top",     cmd_top))
     app.add_handler(CommandHandler("analyze", cmd_analyze))
+    app.add_handler(CommandHandler("compare", cmd_compare))
+    app.add_handler(CommandHandler("groups",  cmd_groups))
     app.add_handler(CommandHandler("add",     cmd_add))
     app.add_handler(CommandHandler("remove",  cmd_remove))
-    app.add_handler(CommandHandler("list",     cmd_list))
+    app.add_handler(CommandHandler("list",    cmd_list))
     app.add_handler(CommandHandler("earnings", cmd_earnings))
 
     # Scheduled jobs
@@ -312,6 +440,11 @@ def main():
     jq.run_daily(
         job_daily_open,
         time=dtime(hour=9, minute=35, tzinfo=ET),
+    )
+    # Earnings alert every trading day at 8:00 AM ET (before market open)
+    jq.run_daily(
+        job_earnings_alert,
+        time=dtime(hour=8, minute=0, tzinfo=ET),
     )
 
     # Startup message

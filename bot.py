@@ -77,12 +77,10 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📈 <b>Jorge Stock Scanner</b>\n\n"
         "/scan — Escanear todo el watchlist\n"
         "/scan SEMIS — Escanear un grupo (AI, SEMIS, BIGTECH…)\n"
-        "/top — Top 5 oportunidades ahora\n"
         "/analyze AAPL — Analizar un stock\n"
         "/compare NVDA AMD — Comparar dos stocks con Claude AI\n"
         "/groups — Ver grupos del watchlist\n"
         "/add AAPL — Agregar al watchlist\n"
-        "/remove AAPL — Quitar del watchlist\n"
         "/list — Ver watchlist\n"
         "/earnings — Próximos earnings del watchlist\n"
         "/help — Esta ayuda",
@@ -184,26 +182,6 @@ async def cmd_compare(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
 
 
-async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🔍 Buscando top 5 oportunidades...")
-    results = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: scan_stocks(_watchlist, min_score=60)
-    )
-
-    if not results:
-        await msg.edit_text("😴 Sin señales claras ahora.")
-        return
-
-    top5 = results[:5]
-    lines = ["🏆 <b>TOP 5 OPORTUNIDADES</b>\n"]
-    for i, s in enumerate(top5, 1):
-        arrow = "🟢" if s["direction"] == "LONG" else "🔴"
-        lines.append(
-            f"{i}. {arrow} <b>{s['symbol']}</b> ${s['price']} "
-            f"| Score: {s['score']} | {s['chg_1d']:+.1f}% hoy"
-        )
-
-    await msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def cmd_analyze(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -245,16 +223,6 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ {sym} ya está en el watchlist")
 
 
-async def cmd_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not ctx.args:
-        await update.message.reply_text("Uso: /remove AAPL")
-        return
-    sym = ctx.args[0].upper().strip()
-    if sym in _watchlist:
-        _watchlist.remove(sym)
-        await update.message.reply_text(f"✅ {sym} removido del watchlist")
-    else:
-        await update.message.reply_text(f"⚠️ {sym} no está en el watchlist")
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -423,12 +391,10 @@ def main():
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("start",   cmd_help))
     app.add_handler(CommandHandler("scan",    cmd_scan))
-    app.add_handler(CommandHandler("top",     cmd_top))
     app.add_handler(CommandHandler("analyze", cmd_analyze))
     app.add_handler(CommandHandler("compare", cmd_compare))
     app.add_handler(CommandHandler("groups",  cmd_groups))
     app.add_handler(CommandHandler("add",     cmd_add))
-    app.add_handler(CommandHandler("remove",  cmd_remove))
     app.add_handler(CommandHandler("list",    cmd_list))
     app.add_handler(CommandHandler("earnings", cmd_earnings))
 

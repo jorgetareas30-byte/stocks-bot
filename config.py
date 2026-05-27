@@ -17,8 +17,6 @@ WATCHLIST = [
     "NVO", "LLY", "ABBV", "MRNA",
     # Finance
     "JPM", "GS", "BAC", "V", "MA",
-    # ETFs
-    "SPY", "QQQ", "SOXX",
 ]
 
 # Watchlist groups — use with /scan SECTOR or /groups
@@ -28,7 +26,6 @@ WATCHLIST_GROUPS = {
     "AI":       ["NVDA", "PLTR", "SOUN", "AI", "SMCI", "ARM"],
     "HEALTH":   ["NVO", "LLY", "ABBV", "MRNA"],
     "FINANCE":  ["JPM", "GS", "BAC", "V", "MA"],
-    "ETFS":     ["SPY", "QQQ", "SOXX"],
 }
 
 # Minimum score to send alert

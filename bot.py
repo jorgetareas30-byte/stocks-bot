@@ -82,7 +82,7 @@ _alerts: dict = {}
 # Prevent same stock being alerted twice within COOLDOWN_HOURS
 import time as _time_module
 _last_alerted: dict = {}   # sym → unix timestamp
-COOLDOWN_HOURS = 6
+COOLDOWN_HOURS = 24
 
 
 # ─────────────────────────────────────────────────────────────

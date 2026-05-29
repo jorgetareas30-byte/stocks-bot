@@ -173,13 +173,16 @@ def score_stock(data: dict) -> tuple[int, str, list[str]]:
         reasons.append("📉 Precio bajo EMA21/EMA50")
 
     # ── RSI ───────────────────────────────────────────────
-    if 50 < rsi < 70:
+    if 45 < rsi < 65:
         bullish += 2
-        reasons.append(f"💪 RSI {rsi:.0f} — momentum alcista sin sobrecompra")
-    elif rsi >= 70:
-        bearish += 1
-        reasons.append(f"⚠️ RSI {rsi:.0f} — sobrecomprado")
-    elif 30 < rsi < 50:
+        reasons.append(f"💪 RSI {rsi:.0f} — momentum alcista óptimo (sweet spot)")
+    elif 65 <= rsi < 72:
+        bullish += 1
+        reasons.append(f"📊 RSI {rsi:.0f} — alcista pero vigilar extensión")
+    elif rsi >= 72:
+        bearish += 2
+        reasons.append(f"🔴 RSI {rsi:.0f} — sobrecomprado / mal momento de entrada")
+    elif 30 < rsi <= 45:
         bearish += 1
         reasons.append(f"📉 RSI {rsi:.0f} — momentum bajista")
     elif rsi <= 30:
@@ -223,12 +226,21 @@ def score_stock(data: dict) -> tuple[int, str, list[str]]:
         reasons.append(f"⚠️ Cerca de mínimo 52 semanas ({range52:.0f}%)")
 
     # ── Daily change ──────────────────────────────────────
-    if chg_1d >= 3:
+    if 1.0 <= chg_1d < 4.0:
         bullish += 1
-        reasons.append(f"🚀 +{chg_1d:.1f}% hoy — momentum fuerte")
+        reasons.append(f"🚀 +{chg_1d:.1f}% hoy — momentum positivo")
+    elif chg_1d >= 4.0:
+        bearish += 1
+        reasons.append(f"⚠️ +{chg_1d:.1f}% hoy — movimiento extendido, mal entry")
     elif chg_1d <= -3:
         bearish += 1
         reasons.append(f"💥 {chg_1d:.1f}% hoy — caída fuerte")
+
+    # ── 5-day extension ───────────────────────────────────
+    chg_5d = data.get("chg_5d") or 0
+    if chg_5d >= 10:
+        bearish += 1
+        reasons.append(f"⚠️ +{chg_5d:.1f}% en 5 días — stock extendido, espera pullback")
 
     # ── Final score ───────────────────────────────────────
     net = bullish - bearish
@@ -290,6 +302,20 @@ def scan_stocks(symbols: list, min_score: int = 65) -> list:
             return None
         score, direction, reasons = score_stock(data)
         if direction == "NEUTRAL":
+            return None
+
+        # ── Hard quality filters ───────────────────────────
+        # Require volume confirmation — no volume = no signal
+        if data["vol_ratio"] < 1.2:
+            log.debug(f"⛔ {sym} filtrado — volumen bajo ({data['vol_ratio']:.1f}x)")
+            return None
+        # Don't chase extended LONG signals
+        if direction == "LONG" and data["rsi"] >= 75:
+            log.debug(f"⛔ {sym} filtrado — RSI extendido ({data['rsi']:.0f})")
+            return None
+        # Don't short oversold stocks
+        if direction == "SHORT" and data["rsi"] <= 25:
+            log.debug(f"⛔ {sym} filtrado — RSI sobreventa ({data['rsi']:.0f})")
             return None
 
         # Earnings calendar filter — block if earnings too close

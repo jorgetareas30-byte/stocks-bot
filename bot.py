@@ -78,6 +78,12 @@ _watchlist = _load_watchlist()
 # {symbol: {"target": float, "direction": "above"|"below", "chat_id": str}}
 _alerts: dict = {}
 
+# ── Signal cooldown ───────────────────────────────────────────
+# Prevent same stock being alerted twice within COOLDOWN_HOURS
+import time as _time_module
+_last_alerted: dict = {}   # sym → unix timestamp
+COOLDOWN_HOURS = 6
+
 
 # ─────────────────────────────────────────────────────────────
 # Helpers
@@ -616,12 +622,25 @@ async def job_auto_scan(ctx: ContextTypes.DEFAULT_TYPE):
     if not chat_id:
         return
 
-    for stock in results[:3]:
+    now = _time_module.time()
+    cooldown_secs = COOLDOWN_HOURS * 3600
+    sent = 0
+
+    for stock in results:
+        if sent >= 2:   # Max 2 señales por hora en auto-scan
+            break
+        sym = stock["symbol"]
+        # Skip if same stock was alerted recently
+        if now - _last_alerted.get(sym, 0) < cooldown_secs:
+            log.info(f"⏳ {sym} en cooldown, skipping")
+            continue
         ai   = await asyncio.get_event_loop().run_in_executor(
             None, lambda s=stock: analyze_stock_with_claude(s)
         )
         text = "🤖 <b>AUTO-SCAN</b>\n\n" + format_stock_alert(stock, ai)
         await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        _last_alerted[sym] = now
+        sent += 1
         await asyncio.sleep(1)
 
 
@@ -650,12 +669,23 @@ async def job_daily_open(ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(chat_id=chat_id, text="😴 Sin señales fuertes al abrir. Monitoreo activo.")
         return
 
-    for stock in results[:5]:
+    now = _time_module.time()
+    cooldown_secs = COOLDOWN_HOURS * 3600
+    sent = 0
+
+    for stock in results:
+        if sent >= 3:   # Max 3 señales al abrir el mercado
+            break
+        sym = stock["symbol"]
+        if now - _last_alerted.get(sym, 0) < cooldown_secs:
+            continue
         ai   = await asyncio.get_event_loop().run_in_executor(
             None, lambda s=stock: analyze_stock_with_claude(s)
         )
         text = "🌅 <b>APERTURA DEL MERCADO</b>\n\n" + format_stock_alert(stock, ai)
         await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        _last_alerted[sym] = now
+        sent += 1
         await asyncio.sleep(1)
 
 

@@ -803,8 +803,6 @@ async def job_auto_scan(ctx: ContextTypes.DEFAULT_TYPE):
     if not chat_id:
         return
 
-    now = _time_module.time()
-    cooldown_secs = COOLDOWN_HOURS * 3600
     sent = 0
 
     for stock in results:
@@ -889,8 +887,6 @@ async def job_daily_open(ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(chat_id=chat_id, text=header, parse_mode=ParseMode.HTML)
 
     # Top setups
-    now = _time_module.time()
-    cooldown_secs = COOLDOWN_HOURS * 3600
     sent = 0
 
     for stock in market.get("top_setups", []):

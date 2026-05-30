@@ -394,6 +394,118 @@ def scan_breakouts(symbols: list) -> list:
     return sorted(results, key=lambda x: x["score"], reverse=True)
 
 
+def get_etf_bias(etf_symbol: str) -> dict:
+    """
+    Fetch quick ETF direction bias.
+    Returns {"direction": "bullish"|"bearish"|"neutral", "chg_1d": float, "rsi": float}
+    """
+    try:
+        ticker = yf.Ticker(etf_symbol)
+        df     = ticker.history(period="3mo", interval="1d")
+        if df.empty or len(df) < 30:
+            return {"direction": "neutral", "chg_1d": 0, "rsi": 50}
+
+        close   = df["Close"]
+        price   = float(close.iloc[-1])
+        ema21   = float(_ema(close, 21).iloc[-1])
+        ema50   = float(_ema(close, 50).iloc[-1])
+        rsi_val = float(_rsi(close).iloc[-1])
+        chg_1d  = round(((close.iloc[-1] / close.iloc[-2]) - 1) * 100, 2)
+
+        if price > ema21 > ema50 and rsi_val > 50:
+            direction = "bullish"
+        elif price < ema21 < ema50 and rsi_val < 50:
+            direction = "bearish"
+        else:
+            direction = "neutral"
+
+        return {"direction": direction, "chg_1d": chg_1d, "rsi": round(rsi_val, 1)}
+    except Exception:
+        return {"direction": "neutral", "chg_1d": 0, "rsi": 50}
+
+
+# Cache ETF bias so we don't fetch it for every stock in the same scan
+_etf_bias_cache: dict = {}   # {etf_symbol: (timestamp, bias_dict)}
+_ETF_CACHE_TTL = 900         # 15 minutes
+
+
+def get_etf_bias_cached(etf_symbol: str) -> dict:
+    """Cached version of get_etf_bias — refreshes every 15 min."""
+    import time as _t
+    now = _t.time()
+    if etf_symbol in _etf_bias_cache:
+        ts, bias = _etf_bias_cache[etf_symbol]
+        if now - ts < _ETF_CACHE_TTL:
+            return bias
+    bias = get_etf_bias(etf_symbol)
+    _etf_bias_cache[etf_symbol] = (now, bias)
+    return bias
+
+
+def apply_sector_confirmation(score: int, direction: str, symbol: str) -> tuple[int, list[str]]:
+    """
+    Apply ETF sector confirmation multiplier to a stock's score.
+    Bullish stock + bullish sector ETF → boost.
+    Bullish stock + bearish sector ETF → penalty.
+    Returns (adjusted_score, extra_reasons).
+    """
+    import config as _cfg
+    etf = _cfg.SECTOR_ETF_MAP.get(symbol.upper())
+    if not etf:
+        return score, []
+
+    bias   = get_etf_bias_cached(etf)
+    reasons = []
+    etf_dir = bias["direction"]
+
+    if direction == "LONG":
+        if etf_dir == "bullish":
+            new_score = min(100, round(score * 1.08))
+            reasons.append(f"✅ Sector ETF {etf} alcista ({bias['chg_1d']:+.1f}%) — confirmación +8%")
+        elif etf_dir == "bearish":
+            new_score = round(score * 0.90)
+            reasons.append(f"⚠️ Sector ETF {etf} bajista ({bias['chg_1d']:+.1f}%) — penalización -10%")
+        else:
+            new_score = score
+            reasons.append(f"📊 Sector ETF {etf} neutral ({bias['chg_1d']:+.1f}%)")
+    else:  # SHORT
+        if etf_dir == "bearish":
+            new_score = min(100, round(score * 1.08))
+            reasons.append(f"✅ Sector ETF {etf} bajista — confirma SHORT +8%")
+        elif etf_dir == "bullish":
+            new_score = round(score * 0.90)
+            reasons.append(f"⚠️ Sector ETF {etf} alcista — contradice SHORT -10%")
+        else:
+            new_score = score
+            reasons.append(f"📊 Sector ETF {etf} neutral")
+
+    return new_score, reasons
+
+
+def scan_etfs(etf_list: list) -> list:
+    """Scan all ETFs and return performance data sorted by change."""
+    results = []
+
+    def _fetch_etf(sym):
+        data = fetch_stock_data(sym)
+        if not data:
+            return None
+        score, direction, reasons = score_stock(data)
+        return {**data, "score": score, "direction": direction, "reasons": reasons}
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {pool.submit(_fetch_etf, s): s for s in etf_list}
+        for fut in as_completed(futures):
+            try:
+                res = fut.result()
+                if res:
+                    results.append(res)
+            except Exception:
+                pass
+
+    return sorted(results, key=lambda x: x["chg_1d"], reverse=True)
+
+
 def scan_stocks(symbols: list, min_score: int = 65) -> list:
     """
     Scan multiple stocks in parallel.
@@ -433,6 +545,10 @@ def scan_stocks(symbols: list, min_score: int = 65) -> list:
                 return None
         except Exception:
             pass
+
+        # Sector ETF confirmation — boost or penalize based on sector momentum
+        score, etf_reasons = apply_sector_confirmation(score, direction, sym)
+        reasons = reasons + etf_reasons
 
         levels = calc_levels(data, direction)
         return {

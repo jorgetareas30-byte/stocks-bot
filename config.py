@@ -19,13 +19,40 @@ WATCHLIST = [
     "JPM", "GS", "BAC", "V", "MA",
 ]
 
+# ETF watchlist — sector benchmarks + broad market
+ETF_WATCHLIST = [
+    # Broad market
+    "SPY", "QQQ", "IWM",
+    # Sectors
+    "SOXX", "SMH",   # Semiconductors
+    "XLK",           # Technology
+    "ARKK",          # AI / Disruptive Innovation
+    "XLF",           # Financials
+    "XLV",           # Healthcare
+]
+
+# Sector → ETF mapping (used for sector confirmation in scoring)
+SECTOR_ETF_MAP = {
+    # Individual stock sectors → which ETF confirms the move
+    "NVDA": "SOXX", "AMD": "SOXX", "MU": "SOXX",
+    "TSM": "SOXX",  "AVGO": "SOXX", "QCOM": "SOXX", "INTC": "SOXX",
+    "AAPL": "QQQ",  "MSFT": "QQQ",  "GOOGL": "QQQ",
+    "META": "QQQ",  "AMZN": "QQQ",  "TSLA": "QQQ",
+    "PLTR": "ARKK", "SOUN": "ARKK", "AI": "ARKK",
+    "SMCI": "SOXX", "ARM": "SOXX",
+    "NVO":  "XLV",  "LLY": "XLV",   "ABBV": "XLV", "MRNA": "XLV",
+    "JPM":  "XLF",  "GS":  "XLF",   "BAC": "XLF",
+    "V":    "XLF",  "MA":  "XLF",
+}
+
 # Watchlist groups — use with /scan SECTOR or /groups
 WATCHLIST_GROUPS = {
-    "SEMIS":    ["NVDA", "AMD", "MU", "TSM", "AVGO", "QCOM", "INTC", "SOXX"],
+    "SEMIS":    ["NVDA", "AMD", "MU", "TSM", "AVGO", "QCOM", "INTC"],
     "BIGTECH":  ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "TSLA"],
     "AI":       ["NVDA", "PLTR", "SOUN", "AI", "SMCI", "ARM"],
     "HEALTH":   ["NVO", "LLY", "ABBV", "MRNA"],
     "FINANCE":  ["JPM", "GS", "BAC", "V", "MA"],
+    "ETFS":     ["SPY", "QQQ", "IWM", "SOXX", "SMH", "XLK", "ARKK", "XLF", "XLV"],
 }
 
 # Minimum score to send alert

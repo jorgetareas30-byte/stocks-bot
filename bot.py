@@ -38,7 +38,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 import config
-from scanner import scan_stocks, fetch_stock_data, score_stock, calc_levels, scan_breakouts
+from scanner import scan_stocks, fetch_stock_data, score_stock, calc_levels, scan_breakouts, scan_etfs
 from ai_analyst import (analyze_stock_with_claude, format_stock_alert,
                         compare_stocks_with_claude, format_compare_result,
                         generate_morning_brief, optimize_portfolio_with_claude)
@@ -441,6 +441,59 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for chunk in chunks:
         text += "  " + " · ".join(chunk) + "\n"
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_etfs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/etfs — ETF dashboard with sector momentum and market bias."""
+    msg  = await update.message.reply_text("📊 Obteniendo datos de ETFs del mercado...")
+    loop = asyncio.get_event_loop()
+
+    results = await loop.run_in_executor(
+        None, lambda: scan_etfs(config.ETF_WATCHLIST)
+    )
+
+    if not results:
+        await msg.edit_text("❌ No se pudieron obtener datos de ETFs.")
+        return
+
+    # Separate broad market from sector ETFs
+    broad  = [r for r in results if r["symbol"] in ("SPY", "QQQ", "IWM")]
+    sector = [r for r in results if r["symbol"] not in ("SPY", "QQQ", "IWM")]
+
+    def etf_line(r):
+        icon = "🟢" if r["chg_1d"] > 0.3 else "🔴" if r["chg_1d"] < -0.3 else "⚪"
+        trend = "▲" if r["direction"] == "LONG" else "▼" if r["direction"] == "SHORT" else "─"
+        return f"{icon} <b>{r['symbol']}</b> ${r['price']} | {r['chg_1d']:+.2f}% | RSI {r['rsi']:.0f} {trend}"
+
+    # Overall market sentiment
+    spy = next((r for r in broad if r["symbol"] == "SPY"), None)
+    qqq = next((r for r in broad if r["symbol"] == "QQQ"), None)
+    bull_sectors = sum(1 for r in sector if r["direction"] == "LONG")
+    bear_sectors = sum(1 for r in sector if r["direction"] == "SHORT")
+
+    if bull_sectors >= 4:
+        sentiment = "🔥 Mercado alcista — mayoría de sectores en verde"
+    elif bear_sectors >= 4:
+        sentiment = "🧊 Mercado bajista — mayoría de sectores en rojo"
+    else:
+        sentiment = "😐 Mercado mixto — sin dirección clara"
+
+    lines = ["📊 <b>ETF DASHBOARD — MERCADO AHORA</b>\n",
+             f"🧭 {sentiment}\n",
+             "<b>Broad Market:</b>"]
+    for r in broad:
+        lines.append(etf_line(r))
+
+    lines.append("\n<b>Sectores:</b>")
+    for r in sector:
+        lines.append(etf_line(r))
+
+    lines.append(
+        f"\n📈 Sectores alcistas: {bull_sectors} | 📉 Bajistas: {bear_sectors}\n"
+        "<i>Los scores de tus stocks ya incluyen confirmación ETF automáticamente.</i>"
+    )
+
+    await msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def cmd_breakout(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -866,6 +919,7 @@ def main():
     app.add_handler(CommandHandler("earnings",  cmd_earnings))
     app.add_handler(CommandHandler("breakout",  cmd_breakout))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
+    app.add_handler(CommandHandler("etfs",      cmd_etfs))
 
     # Scheduled jobs
     jq = app.job_queue

@@ -173,6 +173,104 @@ def format_compare_result(s1: dict, s2: dict, ai: dict | None) -> str:
     return "\n".join(lines)
 
 
+def generate_morning_brief(market_data: dict) -> str | None:
+    """
+    Ask Claude to generate a personalized morning briefing in Spanish.
+    market_data: {spy_price, spy_chg, vix, top_setups, pre_movers, earnings_today}
+    """
+    client = _get_client()
+    if not client:
+        return None
+
+    setups_text = "\n".join([
+        f"  - {s['symbol']} ({s['direction']}) Score:{s['score']}/100 RSI:{s['rsi']:.0f} +{s['chg_1d']:.1f}%"
+        for s in market_data.get("top_setups", [])[:4]
+    ]) or "  - Sin setups claros hoy"
+
+    movers_text = "\n".join([
+        f"  - {m['symbol']}: {m['chg_1d']:+.1f}%"
+        for m in market_data.get("pre_movers", [])[:4]
+    ]) or "  - Sin movers destacados"
+
+    prompt = f"""Eres mi analista de bolsa personal. Son las 9:35 AM ET — el mercado acaba de abrir.
+
+DATOS DEL MERCADO HOY:
+- SPY: ${market_data.get('spy_price', 0):.2f} ({market_data.get('spy_chg', 0):+.2f}%)
+- VIX: {market_data.get('vix', 0):.1f} {'(MIEDO ALTO ⚠️)' if market_data.get('vix', 0) > 25 else '(tranquilo)'}
+- Movers pre-market:
+{movers_text}
+- Mejores setups técnicos de hoy:
+{setups_text}
+- Earnings hoy: {market_data.get('earnings_today', 'Ninguno relevante')}
+
+Escríbeme un briefing de apertura en español, máximo 5 oraciones. Directo, sin rodeos, como si fuera un trader senior hablándome. Incluye: qué esperar del mercado hoy, el setup más interesante del día, y 1 riesgo a vigilar. No pongas disclaimers."""
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-20250514",
+            max_tokens=350,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        log.warning(f"Morning brief error: {e}")
+        return None
+
+
+def optimize_portfolio_with_claude(positions: list, market_data: dict) -> str | None:
+    """
+    Ask Claude to analyze current IBKR portfolio and give concrete recommendations.
+    positions: [{symbol, shares, avg_cost, current_price, pnl_pct}, ...]
+    """
+    client = _get_client()
+    if not client:
+        return None
+
+    pos_text = "\n".join([
+        f"  - {p['symbol']}: {p['shares']} acc @ avg ${p['avg_cost']} → ahora ${p['current_price']} "
+        f"({p['pnl_pct']:+.1f}%) P&L: ${p['pnl_usd']:+.2f}"
+        for p in positions
+    ])
+
+    total_value  = sum(p['current_price'] * p['shares'] for p in positions)
+    total_cost   = sum(p['avg_cost'] * p['shares'] for p in positions)
+    total_pnl    = total_value - total_cost
+    total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
+
+    prompt = f"""Eres mi advisor de inversiones en acciones. Analiza mi portafolio de IBKR y dame recomendaciones concretas.
+
+MI PORTAFOLIO ACTUAL:
+{pos_text}
+
+RESUMEN:
+- Valor total: ${total_value:.2f}
+- P&L total: ${total_pnl:+.2f} ({total_pnl_pct:+.1f}%)
+- Cash disponible: ${market_data.get('cash', 0):.2f}
+
+CONTEXTO DEL MERCADO:
+- SPY hoy: {market_data.get('spy_chg', 0):+.2f}%
+- VIX: {market_data.get('vix', 0):.1f}
+
+Dame recomendaciones específicas en español:
+1. ¿Qué posición está mejor y debería aumentar?
+2. ¿Qué posición tiene más riesgo ahora mismo?
+3. ¿Con el cash disponible, qué haría?
+4. ¿Hay que proteger alguna posición con stop-loss?
+
+Sé directo y concreto. Sin disclaimers genéricos."""
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-20250514",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        log.warning(f"Portfolio optimizer error: {e}")
+        return None
+
+
 def format_stock_alert(stock: dict, ai: dict | None) -> str:
     """Format a complete Telegram alert for a stock opportunity."""
     arrow = "🟢" if stock["direction"] == "LONG" else "🔴"

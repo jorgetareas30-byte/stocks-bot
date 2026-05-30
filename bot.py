@@ -38,8 +38,10 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 import config
-from scanner import scan_stocks, fetch_stock_data, score_stock, calc_levels
-from ai_analyst import analyze_stock_with_claude, format_stock_alert, compare_stocks_with_claude, format_compare_result
+from scanner import scan_stocks, fetch_stock_data, score_stock, calc_levels, scan_breakouts
+from ai_analyst import (analyze_stock_with_claude, format_stock_alert,
+                        compare_stocks_with_claude, format_compare_result,
+                        generate_morning_brief, optimize_portfolio_with_claude)
 
 # ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -441,6 +443,114 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+async def cmd_breakout(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Scan for stocks coiling — about to break out."""
+    msg = await update.message.reply_text("🗜 Escaneando compresión de precio en todo el watchlist...")
+    loop = asyncio.get_event_loop()
+
+    results = await loop.run_in_executor(None, lambda: scan_breakouts(_watchlist))
+
+    if not results:
+        await msg.edit_text("😴 Sin setups de breakout detectados ahora. Mercado en movimiento.")
+        return
+
+    lines = [f"🗜 <b>BREAKOUT SETUPS — {len(results)} detectados</b>\n",
+             "<i>Stocks comprimiendo — movimiento grande inminente</i>\n"]
+
+    for r in results[:6]:
+        trend_icon = "🟢" if r["trend"] == "ALCISTA" else "🔴"
+        lines.append(
+            f"{trend_icon} <b>{r['symbol']}</b> ${r['price']} | "
+            f"Score: {r['score']}/100 | {r['chg_1d']:+.1f}% hoy"
+        )
+        for reason in r["reasons"][:2]:
+            lines.append(f"  {reason}")
+        lines.append("")
+
+    lines.append("<i>Usa /analyze TICKER para análisis completo · El breakout puede ser en cualquier dirección</i>")
+    await msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_portfolio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/portfolio — Claude analyzes your IBKR portfolio and gives recommendations."""
+    msg = await update.message.reply_text("💼 Analizando tu portafolio IBKR con Claude AI...")
+    loop = asyncio.get_event_loop()
+
+    # Fetch current prices for IBKR positions
+    POSITIONS = [
+        {"symbol": "SMCI", "shares": 12,  "avg_cost": 35.89},
+        {"symbol": "TSM",  "shares": 2,   "avg_cost": 423.35},
+        {"symbol": "QCOM", "shares": 3,   "avg_cost": 243.47},
+    ]
+    CASH = 58.46
+
+    def _fetch_portfolio():
+        enriched = []
+        for p in POSITIONS:
+            data = fetch_stock_data(p["symbol"])
+            if data:
+                cp       = data["price"]
+                pnl_usd  = (cp - p["avg_cost"]) * p["shares"]
+                pnl_pct  = ((cp / p["avg_cost"]) - 1) * 100
+                enriched.append({**p, "current_price": cp,
+                                  "pnl_usd": pnl_usd, "pnl_pct": pnl_pct})
+        return enriched
+
+    # Also fetch SPY/VIX for context
+    def _fetch_market():
+        try:
+            spy  = yf.Ticker("SPY").info
+            vix  = yf.Ticker("^VIX").info
+            return {
+                "spy_chg": spy.get("regularMarketChangePercent", 0),
+                "vix":     vix.get("currentPrice") or vix.get("regularMarketPrice", 20),
+                "cash":    CASH,
+            }
+        except Exception:
+            return {"spy_chg": 0, "vix": 20, "cash": CASH}
+
+    positions, market = await asyncio.gather(
+        loop.run_in_executor(None, _fetch_portfolio),
+        loop.run_in_executor(None, _fetch_market),
+    )
+
+    if not positions:
+        await msg.edit_text("❌ No pude obtener precios. Intenta de nuevo.")
+        return
+
+    # Header with positions
+    total_value = sum(p["current_price"] * p["shares"] for p in positions)
+    total_cost  = sum(p["avg_cost"] * p["shares"] for p in positions)
+    total_pnl   = total_value - total_cost
+    total_pct   = (total_pnl / total_cost * 100) if total_cost else 0
+    pnl_icon    = "🟢" if total_pnl >= 0 else "🔴"
+
+    lines = [
+        "💼 <b>IBKR PORTFOLIO</b>\n",
+        f"💰 Valor total: <b>${total_value:.2f}</b>",
+        f"{pnl_icon} P&L total: <b>${total_pnl:+.2f} ({total_pct:+.1f}%)</b>",
+        f"💵 Cash: ${CASH}\n",
+    ]
+    for p in positions:
+        icon = "🟢" if p["pnl_pct"] >= 0 else "🔴"
+        lines.append(
+            f"{icon} <b>{p['symbol']}</b> ×{p['shares']} @ ${p['avg_cost']} "
+            f"→ ${p['current_price']} | <b>{p['pnl_pct']:+.1f}%</b>"
+        )
+
+    await msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+    # Claude recommendations
+    analysis = await loop.run_in_executor(
+        None, lambda: optimize_portfolio_with_claude(positions, market)
+    )
+    if analysis:
+        await update.message.reply_text(
+            f"🤖 <b>Claude AI — Recomendaciones</b>\n\n{analysis}",
+            parse_mode=ParseMode.HTML,
+        )
+
+
 async def cmd_earnings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("📅 Consultando earnings calendar...")
     try:
@@ -645,7 +755,7 @@ async def job_auto_scan(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def job_daily_open(ctx: ContextTypes.DEFAULT_TYPE):
-    """Daily scan at market open."""
+    """Daily AI Morning Brief + top setups at market open (9:35 AM ET)."""
     chat_id = config.TELEGRAM_CHAT_ID
     if not chat_id:
         return
@@ -654,35 +764,72 @@ async def job_daily_open(ctx: ContextTypes.DEFAULT_TYPE):
     if datetime.now(ET).weekday() >= 5:
         return
 
-    log.info("📈 Daily market open scan...")
-    await ctx.bot.send_message(
-        chat_id=chat_id,
-        text="🔔 <b>Mercado abierto — Escaneando oportunidades del día...</b>",
-        parse_mode=ParseMode.HTML,
+    log.info("🌅 AI Morning Brief generating...")
+    loop = asyncio.get_event_loop()
+
+    def _gather_market():
+        data = {}
+        # SPY + VIX
+        try:
+            spy = yf.Ticker("SPY").info
+            vix = yf.Ticker("^VIX").info
+            data["spy_price"] = spy.get("currentPrice") or spy.get("regularMarketPrice", 0)
+            data["spy_chg"]   = spy.get("regularMarketChangePercent", 0)
+            data["vix"]       = vix.get("currentPrice") or vix.get("regularMarketPrice", 20)
+        except Exception:
+            data.update({"spy_price": 0, "spy_chg": 0, "vix": 20})
+
+        # Pre-market movers
+        movers = []
+        for sym in _watchlist[:20]:
+            d = fetch_stock_data(sym)
+            if d:
+                movers.append(d)
+        movers.sort(key=lambda x: abs(x["chg_1d"]), reverse=True)
+        data["pre_movers"] = movers[:4]
+
+        # Top setups
+        results = scan_stocks(_watchlist, min_score=config.MIN_SCORE)
+        data["top_setups"] = results[:4]
+
+        return data
+
+    market = await loop.run_in_executor(None, _gather_market)
+
+    # Generate AI briefing
+    brief = await loop.run_in_executor(None, lambda: generate_morning_brief(market))
+
+    spy_icon = "🟢" if market["spy_chg"] >= 0 else "🔴"
+    vix_icon = "😱" if market["vix"] > 25 else "😌"
+
+    header = (
+        f"🌅 <b>BUENOS DÍAS — APERTURA DEL MERCADO</b>\n\n"
+        f"{spy_icon} SPY ${market['spy_price']:.2f} ({market['spy_chg']:+.2f}%)  "
+        f"{vix_icon} VIX {market['vix']:.1f}\n"
     )
 
-    results = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: scan_stocks(_watchlist, min_score=65)
-    )
+    if brief:
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=header + f"\n🤖 <b>Claude AI:</b>\n{brief}",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await ctx.bot.send_message(chat_id=chat_id, text=header, parse_mode=ParseMode.HTML)
 
-    if not results:
-        await ctx.bot.send_message(chat_id=chat_id, text="😴 Sin señales fuertes al abrir. Monitoreo activo.")
-        return
-
+    # Top setups
     now = _time_module.time()
     cooldown_secs = COOLDOWN_HOURS * 3600
     sent = 0
 
-    for stock in results:
-        if sent >= 3:   # Max 3 señales al abrir el mercado
+    for stock in market.get("top_setups", []):
+        if sent >= 3:
             break
         sym = stock["symbol"]
         if now - _last_alerted.get(sym, 0) < cooldown_secs:
             continue
-        ai   = await asyncio.get_event_loop().run_in_executor(
-            None, lambda s=stock: analyze_stock_with_claude(s)
-        )
-        text = "🌅 <b>APERTURA DEL MERCADO</b>\n\n" + format_stock_alert(stock, ai)
+        ai   = await loop.run_in_executor(None, lambda s=stock: analyze_stock_with_claude(s))
+        text = "🌅 <b>TOP SETUP DEL DÍA</b>\n\n" + format_stock_alert(stock, ai)
         await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
         _last_alerted[sym] = now
         sent += 1
@@ -716,7 +863,9 @@ def main():
     app.add_handler(CommandHandler("groups",   cmd_groups))
     app.add_handler(CommandHandler("add",      cmd_add))
     app.add_handler(CommandHandler("list",     cmd_list))
-    app.add_handler(CommandHandler("earnings", cmd_earnings))
+    app.add_handler(CommandHandler("earnings",  cmd_earnings))
+    app.add_handler(CommandHandler("breakout",  cmd_breakout))
+    app.add_handler(CommandHandler("portfolio", cmd_portfolio))
 
     # Scheduled jobs
     jq = app.job_queue

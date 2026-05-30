@@ -289,6 +289,111 @@ def calc_levels(data: dict, direction: str) -> dict:
 # Parallel scanner
 # ─────────────────────────────────────────────────────────────
 
+def detect_breakout_setup(symbol: str) -> dict | None:
+    """
+    Detect price compression setups about to break out.
+    Looks for: ATR shrinking + Bollinger squeeze + low volume + near key level.
+    Returns setup dict or None if no compression detected.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        df     = ticker.history(period="3mo", interval="1d")
+        if df.empty or len(df) < 40:
+            return None
+
+        close  = df["Close"]
+        volume = df["Volume"]
+        price  = float(close.iloc[-1])
+
+        # ATR compression: current ATR vs 20-day avg ATR
+        atr_series = _atr(df)
+        atr_now    = float(atr_series.iloc[-1])
+        atr_avg    = float(atr_series.iloc[-20:].mean())
+        atr_ratio  = atr_now / atr_avg if atr_avg else 1.0
+
+        # Bollinger Band squeeze: current width vs 30-day avg width
+        ema20  = _ema(close, 20)
+        std20  = close.rolling(20).std()
+        bb_width     = (4 * std20 / ema20)  # normalized width
+        bb_width_now = float(bb_width.iloc[-1])
+        bb_width_avg = float(bb_width.iloc[-30:].mean())
+        bb_ratio     = bb_width_now / bb_width_avg if bb_width_avg else 1.0
+
+        # Volume drying up (calm before storm)
+        vol_avg = float(volume.rolling(20).mean().iloc[-1])
+        vol_now = float(volume.iloc[-1])
+        vol_ratio = vol_now / vol_avg if vol_avg else 1.0
+
+        # Price near EMA21 (coiling around key level)
+        ema21     = float(_ema(close, 21).iloc[-1])
+        near_ema  = abs(price - ema21) / ema21 < 0.02  # within 2%
+
+        # Compression score
+        score = 0
+        reasons = []
+
+        if atr_ratio < 0.75:
+            score += 35
+            reasons.append(f"🗜 ATR comprimido {atr_ratio:.0%} del promedio")
+        elif atr_ratio < 0.90:
+            score += 20
+            reasons.append(f"⚡ ATR bajando ({atr_ratio:.0%})")
+
+        if bb_ratio < 0.65:
+            score += 35
+            reasons.append(f"🔵 Bollinger squeeze ({bb_ratio:.0%})")
+        elif bb_ratio < 0.80:
+            score += 20
+            reasons.append(f"📊 Bollinger contrayendo ({bb_ratio:.0%})")
+
+        if vol_ratio < 0.7:
+            score += 20
+            reasons.append(f"😴 Volumen seco ({vol_ratio:.1f}x) — acumulación silenciosa")
+
+        if near_ema:
+            score += 10
+            reasons.append(f"📍 Precio coiling en EMA21 (${ema21:.2f})")
+
+        if score < 50:
+            return None
+
+        # Trend context
+        ema50  = float(_ema(close, 50).iloc[-1])
+        trend  = "ALCISTA" if price > ema50 else "BAJISTA"
+        chg_1d = round(((close.iloc[-1] / close.iloc[-2]) - 1) * 100, 2)
+
+        return {
+            "symbol":     symbol,
+            "price":      round(price, 2),
+            "score":      score,
+            "atr_ratio":  round(atr_ratio, 2),
+            "bb_ratio":   round(bb_ratio, 2),
+            "vol_ratio":  round(vol_ratio, 2),
+            "trend":      trend,
+            "chg_1d":     chg_1d,
+            "reasons":    reasons,
+        }
+
+    except Exception as e:
+        log.warning(f"breakout_detect({symbol}): {e}")
+        return None
+
+
+def scan_breakouts(symbols: list) -> list:
+    """Scan for breakout compression setups across all symbols."""
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(detect_breakout_setup, s): s for s in symbols}
+        for fut in as_completed(futures):
+            try:
+                res = fut.result()
+                if res:
+                    results.append(res)
+            except Exception:
+                pass
+    return sorted(results, key=lambda x: x["score"], reverse=True)
+
+
 def scan_stocks(symbols: list, min_score: int = 65) -> list:
     """
     Scan multiple stocks in parallel.

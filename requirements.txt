@@ -5,3 +5,4 @@ numpy
 anthropic
 python-dotenv
 pytz
+redis

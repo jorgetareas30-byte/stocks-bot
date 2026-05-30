@@ -74,17 +74,22 @@ def _save_watchlist(wl: list):
     except Exception as e:
         log.warning(f"Watchlist save error: {e}")
 
-_watchlist = _load_watchlist()
-
-# ── Price alerts ──────────────────────────────────────────────
-# {symbol: {"target": float, "direction": "above"|"below", "chat_id": str}}
-_alerts: dict = {}
-
-# ── Signal cooldown ───────────────────────────────────────────
-# Prevent same stock being alerted twice within COOLDOWN_HOURS
+# ── Redis persistence layer ───────────────────────────────────
 import time as _time_module
-_last_alerted: dict = {}   # sym → unix timestamp
+from db.redis_store import (
+    set_cooldown      as _set_cooldown,
+    check_cooldown    as _check_cooldown,
+    save_alert        as _save_alert,
+    get_all_alerts    as _get_all_alerts,
+    delete_alert      as _delete_alert,
+    load_watchlist    as _load_watchlist_redis,
+    save_watchlist    as _save_watchlist_redis,
+    redis_status,
+)
 COOLDOWN_HOURS = 24
+
+# Load watchlist from Redis (falls back to JSON → config)
+_watchlist = _load_watchlist_redis(config.WATCHLIST)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -320,12 +325,12 @@ async def cmd_alert(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     direction = "above" if target > current else "below"
-    _alerts[sym] = {
+    _save_alert(sym, {
         "target":    target,
         "direction": direction,
         "chat_id":   update.effective_chat.id,
         "current":   current,
-    }
+    })
 
     arrow = "⬆️" if direction == "above" else "⬇️"
     await update.message.reply_text(
@@ -339,11 +344,12 @@ async def cmd_alert(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_alerts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show active alerts."""
+    _alerts = _get_all_alerts()
     if not _alerts:
         await update.message.reply_text("📭 No tienes alertas activas.\nUsa /alert NVDA 140 para crear una.")
         return
 
-    lines = ["🔔 <b>Alertas activas</b>\n"]
+    lines = ["🔔 <b>Alertas activas</b> (Redis — sobreviven reinicios)\n"]
     for sym, a in _alerts.items():
         arrow = "⬆️" if a["direction"] == "above" else "⬇️"
         lines.append(f"<b>{sym}</b> {arrow} ${a['target']} (entrada: ${a['current']})")
@@ -358,8 +364,9 @@ async def cmd_delalert(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uso: /delalert NVDA")
         return
     sym = ctx.args[0].upper().strip()
+    _alerts = _get_all_alerts()
     if sym in _alerts:
-        del _alerts[sym]
+        _delete_alert(sym)
         await update.message.reply_text(f"✅ Alerta de {sym} eliminada.")
     else:
         await update.message.reply_text(f"⚠️ No hay alerta activa para {sym}.")
@@ -439,8 +446,8 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sym = ctx.args[0].upper().strip()
     if sym not in _watchlist:
         _watchlist.append(sym)
-        _save_watchlist(_watchlist)
-        await update.message.reply_text(f"✅ {sym} agregado al watchlist ({len(_watchlist)} total) — guardado ✓")
+        _save_watchlist_redis(_watchlist)
+        await update.message.reply_text(f"✅ {sym} agregado al watchlist ({len(_watchlist)} total) — guardado en Redis ✓")
     else:
         await update.message.reply_text(f"⚠️ {sym} ya está en el watchlist")
 
@@ -633,6 +640,7 @@ async def cmd_earnings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def job_alert_checker(ctx: ContextTypes.DEFAULT_TYPE):
     """Check price alerts every 60 seconds."""
+    _alerts = _get_all_alerts()
     if not _alerts:
         return
 
@@ -668,7 +676,7 @@ async def job_alert_checker(ctx: ContextTypes.DEFAULT_TYPE):
             log.warning(f"Alert check error ({sym}): {e}")
 
     for sym in triggered:
-        _alerts.pop(sym, None)
+        _delete_alert(sym)
 
 
 async def job_earnings_alert(ctx: ContextTypes.DEFAULT_TYPE):
@@ -804,7 +812,7 @@ async def job_auto_scan(ctx: ContextTypes.DEFAULT_TYPE):
             break
         sym = stock["symbol"]
         # Skip if same stock was alerted recently
-        if now - _last_alerted.get(sym, 0) < cooldown_secs:
+        if _check_cooldown(sym, COOLDOWN_HOURS):
             log.info(f"⏳ {sym} en cooldown, skipping")
             continue
         ai   = await asyncio.get_event_loop().run_in_executor(
@@ -812,7 +820,7 @@ async def job_auto_scan(ctx: ContextTypes.DEFAULT_TYPE):
         )
         text = "🤖 <b>AUTO-SCAN</b>\n\n" + format_stock_alert(stock, ai)
         await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
-        _last_alerted[sym] = now
+        _set_cooldown(sym, COOLDOWN_HOURS)
         sent += 1
         await asyncio.sleep(1)
 
@@ -889,12 +897,12 @@ async def job_daily_open(ctx: ContextTypes.DEFAULT_TYPE):
         if sent >= 3:
             break
         sym = stock["symbol"]
-        if now - _last_alerted.get(sym, 0) < cooldown_secs:
+        if _check_cooldown(sym, COOLDOWN_HOURS):
             continue
         ai   = await loop.run_in_executor(None, lambda s=stock: analyze_stock_with_claude(s))
         text = "🌅 <b>TOP SETUP DEL DÍA</b>\n\n" + format_stock_alert(stock, ai)
         await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
-        _last_alerted[sym] = now
+        _set_cooldown(sym, COOLDOWN_HOURS)
         sent += 1
         await asyncio.sleep(1)
 

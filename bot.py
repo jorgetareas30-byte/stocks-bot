@@ -100,11 +100,15 @@ async def send_startup_message(app: Application):
         text=(
             "📈 <b>Jorge Stock Scanner — Online</b>\n\n"
             f"✅ Watchlist: {len(_watchlist)} acciones\n"
+            f"📊 ETFs: {len(config.ETF_WATCHLIST)} (SPY QQQ IWM SOXX SMH XLK ARKK XLF XLV)\n"
             "🤖 Claude AI: Activo\n"
             "⏰ Scan automático: cada hora en horario de mercado\n"
-            "🌅 Pre-market: 8:30 AM ET\n"
-            "🔔 Price alerts: activos\n\n"
-            "Usa /scan para escanear ahora o /help para ver comandos."
+            "🌅 AI Morning Brief: 9:35 AM ET\n"
+            "🌄 Pre-market: 8:30 AM ET\n"
+            "🔔 Price alerts: activos\n"
+            "🧠 Sector confirmation ETF: activo\n\n"
+            "/scan · /etfs · /breakout · /portfolio · /movers · /brief\n"
+            "/alert · /compare · /analyze · /help"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -125,20 +129,26 @@ def _get_market_price(symbol: str) -> float | None:
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📈 <b>Jorge Stock Scanner</b>\n\n"
+        "<b>📡 Escaneo</b>\n"
         "/scan — Escanear todo el watchlist\n"
-        "/scan SEMIS — Escanear un grupo (AI, SEMIS, BIGTECH…)\n"
-        "/analyze AAPL — Analizar un stock con Claude AI\n"
-        "/compare NVDA AMD — Comparar dos stocks\n"
+        "/scan SEMIS — Escanear un grupo (AI, SEMIS, BIGTECH, ETFS…)\n"
+        "/etfs — Dashboard de ETFs + sentimiento de mercado\n"
+        "/breakout — Stocks comprimidos a punto de explotar\n"
         "/movers — Top gainers y losers del día\n"
-        "/brief — Resumen rápido del mercado\n"
+        "/brief — Resumen rápido del mercado\n\n"
+        "<b>🔍 Análisis</b>\n"
+        "/analyze AAPL — Analizar stock con Claude AI\n"
+        "/compare NVDA AMD — Comparar dos stocks\n"
+        "/portfolio — Tu portafolio IBKR con recomendaciones Claude\n"
+        "/earnings — Próximos earnings del watchlist\n\n"
+        "<b>🔔 Alertas</b>\n"
         "/alert NVDA 140 — Alerta de precio\n"
         "/alerts — Ver alertas activas\n"
-        "/delalert NVDA — Eliminar alerta\n"
-        "/groups — Ver grupos del watchlist\n"
+        "/delalert NVDA — Eliminar alerta\n\n"
+        "<b>📋 Watchlist</b>\n"
         "/add AAPL — Agregar al watchlist\n"
         "/list — Ver watchlist\n"
-        "/earnings — Próximos earnings\n"
-        "/help — Esta ayuda",
+        "/groups — Ver grupos disponibles",
         parse_mode=ParseMode.HTML,
     )
 

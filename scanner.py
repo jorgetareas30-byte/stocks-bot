@@ -173,18 +173,18 @@ def score_stock(data: dict) -> tuple[int, str, list[str]]:
         reasons.append("📉 Precio bajo EMA21/EMA50")
 
     # ── RSI ───────────────────────────────────────────────
-    if 45 < rsi < 65:
+    if 42 < rsi < 68:
         bullish += 2
-        reasons.append(f"💪 RSI {rsi:.0f} — momentum alcista óptimo (sweet spot)")
-    elif 65 <= rsi < 72:
+        reasons.append(f"💪 RSI {rsi:.0f} — momentum alcista (zona óptima)")
+    elif 68 <= rsi < 75:
         bullish += 1
-        reasons.append(f"📊 RSI {rsi:.0f} — alcista pero vigilar extensión")
-    elif rsi >= 72:
-        bearish += 2
-        reasons.append(f"🔴 RSI {rsi:.0f} — sobrecomprado / mal momento de entrada")
-    elif 30 < rsi <= 45:
+        reasons.append(f"📊 RSI {rsi:.0f} — alcista, vigilar extensión")
+    elif rsi >= 75:
         bearish += 1
-        reasons.append(f"📉 RSI {rsi:.0f} — momentum bajista")
+        reasons.append(f"⚠️ RSI {rsi:.0f} — sobrecomprado")
+    elif 30 < rsi <= 42:
+        bearish += 1
+        reasons.append(f"📉 RSI {rsi:.0f} — momentum débil")
     elif rsi <= 30:
         bullish += 1
         reasons.append(f"🔥 RSI {rsi:.0f} — sobreventa, posible rebote")
@@ -521,18 +521,13 @@ def scan_stocks(symbols: list, min_score: int = 65) -> list:
         if direction == "NEUTRAL":
             return None
 
-        # ── Hard quality filters ───────────────────────────
-        # Require volume confirmation — no volume = no signal
-        if data["vol_ratio"] < 1.2:
-            log.debug(f"⛔ {sym} filtrado — volumen bajo ({data['vol_ratio']:.1f}x)")
+        # ── Quality filters (relaxed for better signal flow) ──
+        # Block only extreme RSI — too overbought/oversold for entry
+        if direction == "LONG" and data["rsi"] >= 80:
+            log.debug(f"⛔ {sym} filtrado — RSI extremo ({data['rsi']:.0f})")
             return None
-        # Don't chase extended LONG signals
-        if direction == "LONG" and data["rsi"] >= 75:
-            log.debug(f"⛔ {sym} filtrado — RSI extendido ({data['rsi']:.0f})")
-            return None
-        # Don't short oversold stocks
-        if direction == "SHORT" and data["rsi"] <= 25:
-            log.debug(f"⛔ {sym} filtrado — RSI sobreventa ({data['rsi']:.0f})")
+        if direction == "SHORT" and data["rsi"] <= 20:
+            log.debug(f"⛔ {sym} filtrado — RSI extremo ({data['rsi']:.0f})")
             return None
 
         # Earnings calendar filter — block if earnings too close

@@ -56,7 +56,7 @@ WATCHLIST_GROUPS = {
 }
 
 # Minimum score to send alert
-MIN_SCORE = 75
+MIN_SCORE = 68
 
 # Scan schedule (market hours ET)
 SCAN_INTERVAL_MINUTES = 60   # Scan every hour during market hours

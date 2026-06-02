@@ -76,19 +76,54 @@ def _save_watchlist(wl: list):
 
 # ── Redis persistence layer ───────────────────────────────────
 import time as _time_module
-from db.redis_store import (
-    set_cooldown      as _set_cooldown,
-    check_cooldown    as _check_cooldown,
-    save_alert        as _save_alert,
-    get_all_alerts    as _get_all_alerts,
-    delete_alert      as _delete_alert,
-    load_watchlist    as _load_watchlist_redis,
-    save_watchlist    as _save_watchlist_redis,
-    redis_status,
-)
 COOLDOWN_HOURS = 24
 
-# Load watchlist from Redis (falls back to JSON → config)
+try:
+    from db.redis_store import (
+        set_cooldown      as _set_cooldown,
+        check_cooldown    as _check_cooldown,
+        save_alert        as _save_alert,
+        get_all_alerts    as _get_all_alerts,
+        delete_alert      as _delete_alert,
+        load_watchlist    as _load_watchlist_redis,
+        save_watchlist    as _save_watchlist_redis,
+        redis_status,
+    )
+    _redis_available = True
+except Exception as _redis_err:
+    log.warning(f"⚠️ Redis not available: {_redis_err} — using in-memory fallback")
+    _redis_available = False
+
+    # Fallback implementations
+    _last_alerted: dict = {}
+    _alerts_mem: dict = {}
+
+    def _set_cooldown(sym, hours=24):
+        _last_alerted[sym] = _time_module.time()
+
+    def _check_cooldown(sym, hours=24):
+        ts = _last_alerted.get(sym, 0)
+        return (_time_module.time() - ts) < hours * 3600
+
+    def _save_alert(sym, data):
+        _alerts_mem[sym] = data
+
+    def _get_all_alerts():
+        return dict(_alerts_mem)
+
+    def _delete_alert(sym):
+        _alerts_mem.pop(sym, None)
+
+    def _load_watchlist_redis(fallback):
+        return _load_watchlist()
+
+    def _save_watchlist_redis(wl):
+        _save_watchlist(wl)
+
+    def redis_status():
+        return "🔴 Redis offline — usando memoria local"
+
+# Load watchlist
 _watchlist = _load_watchlist_redis(config.WATCHLIST)
 
 

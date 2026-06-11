@@ -599,24 +599,41 @@ async def cmd_portfolio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("💼 Analizando tu portafolio IBKR con Claude AI...")
     loop = asyncio.get_event_loop()
 
-    # Fetch current prices for IBKR positions
-    POSITIONS = [
-        {"symbol": "SMCI", "shares": 12,  "avg_cost": 35.89},
-        {"symbol": "TSM",  "shares": 2,   "avg_cost": 423.35},
-        {"symbol": "QCOM", "shares": 3,   "avg_cost": 243.47},
+    # Posiciones desde Postgres (misma fuente que el Financial Advisor).
+    # Fallback hardcodeado solo si la DB no responde.
+    FALLBACK_POSITIONS = [
+        {"symbol": "SMCI", "shares": 10, "avg_cost": 29.70},
+        {"symbol": "TSM",  "shares": 2,  "avg_cost": 414.20},
+        {"symbol": "QCOM", "shares": 3,  "avg_cost": 192.80},
     ]
-    CASH = 58.46
+    CASH = 51.43
+
+    def _get_price(symbol: str) -> float | None:
+        """Precio robusto: NaN-safe, con doble fallback."""
+        import math
+        data = fetch_stock_data(symbol)
+        if data and data.get("price") is not None and not math.isnan(data["price"]):
+            return float(data["price"])
+        try:
+            hist = yf.Ticker(symbol).history(period="5d")["Close"].dropna()
+            if len(hist):
+                return float(hist.iloc[-1])
+        except Exception:
+            pass
+        return None
 
     def _fetch_portfolio():
+        from db.postgres_positions import get_ibkr_positions
+        positions_src = get_ibkr_positions() or FALLBACK_POSITIONS
         enriched = []
-        for p in POSITIONS:
-            data = fetch_stock_data(p["symbol"])
-            if data:
-                cp       = data["price"]
-                pnl_usd  = (cp - p["avg_cost"]) * p["shares"]
-                pnl_pct  = ((cp / p["avg_cost"]) - 1) * 100
-                enriched.append({**p, "current_price": cp,
-                                  "pnl_usd": pnl_usd, "pnl_pct": pnl_pct})
+        for p in positions_src:
+            cp = _get_price(p["symbol"])
+            if cp is None:
+                continue
+            pnl_usd = (cp - p["avg_cost"]) * p["shares"]
+            pnl_pct = ((cp / p["avg_cost"]) - 1) * 100
+            enriched.append({**p, "current_price": round(cp, 2),
+                             "pnl_usd": pnl_usd, "pnl_pct": pnl_pct})
         return enriched
 
     # Also fetch SPY/VIX for context

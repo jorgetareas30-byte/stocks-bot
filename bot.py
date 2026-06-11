@@ -74,6 +74,23 @@ def _save_watchlist(wl: list):
     except Exception as e:
         log.warning(f"Watchlist save error: {e}")
 
+# ── Signal outcome tracking ───────────────────────────────────
+try:
+    from signal_history import record_signal, update_outcomes, format_performance
+    _history_available = True
+except Exception as _hist_err:
+    log.warning(f"⚠️ signal_history not available: {_hist_err}")
+    _history_available = False
+
+    def record_signal(stock, source="auto_scan"):
+        pass
+
+    def update_outcomes():
+        return 0
+
+    def format_performance():
+        return "📊 Tracking no disponible."
+
 # ── Redis persistence layer ───────────────────────────────────
 import time as _time_module
 COOLDOWN_HOURS = 24
@@ -180,7 +197,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/analyze AAPL — Analizar stock con Claude AI\n"
         "/compare NVDA AMD — Comparar dos stocks\n"
         "/portfolio — Tu portafolio IBKR con recomendaciones Claude\n"
-        "/earnings — Próximos earnings del watchlist\n\n"
+        "/earnings — Próximos earnings del watchlist\n"
+        "/performance — Win rate real de las señales del bot\n\n"
         "<b>🔔 Alertas</b>\n"
         "/alert NVDA 140 — Alerta de precio\n"
         "/alerts — Ver alertas activas\n"
@@ -853,6 +871,7 @@ async def job_auto_scan(ctx: ContextTypes.DEFAULT_TYPE):
         )
         text = "🤖 <b>AUTO-SCAN</b>\n\n" + format_stock_alert(stock, ai)
         await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        record_signal(stock, source="auto_scan")
         _set_cooldown(sym, COOLDOWN_HOURS)
         sent += 1
         await asyncio.sleep(1)
@@ -933,9 +952,47 @@ async def job_daily_open(ctx: ContextTypes.DEFAULT_TYPE):
         ai   = await loop.run_in_executor(None, lambda s=stock: analyze_stock_with_claude(s))
         text = "🌅 <b>TOP SETUP DEL DÍA</b>\n\n" + format_stock_alert(stock, ai)
         await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        record_signal(stock, source="morning_brief")
         _set_cooldown(sym, COOLDOWN_HOURS)
         sent += 1
         await asyncio.sleep(1)
+
+
+async def cmd_performance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Win rate y expectancy de señales verificadas."""
+    msg = await update.message.reply_text("📊 Verificando outcomes...")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, update_outcomes)
+    text = await loop.run_in_executor(None, format_performance)
+    await msg.edit_text(text, parse_mode=ParseMode.HTML)
+
+
+async def job_outcome_check(ctx: ContextTypes.DEFAULT_TYPE):
+    """Daily after close — verify open signals against real price action."""
+    from datetime import datetime
+    if datetime.now(ET).weekday() >= 5:
+        return
+    closed = await asyncio.get_event_loop().run_in_executor(None, update_outcomes)
+    if closed:
+        log.info(f"📊 Outcome check: {closed} señales cerradas")
+
+
+async def job_weekly_performance(ctx: ContextTypes.DEFAULT_TYPE):
+    """Sunday evening — weekly verified performance report."""
+    from datetime import datetime
+    if datetime.now(ET).weekday() != 6:
+        return
+    chat_id = config.TELEGRAM_CHAT_ID
+    if not chat_id:
+        return
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, update_outcomes)
+    text = await loop.run_in_executor(None, format_performance)
+    await ctx.bot.send_message(
+        chat_id=chat_id,
+        text="🗓 <b>REPORTE SEMANAL</b>\n\n" + text,
+        parse_mode=ParseMode.HTML,
+    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -968,7 +1025,8 @@ def main():
     app.add_handler(CommandHandler("earnings",  cmd_earnings))
     app.add_handler(CommandHandler("breakout",  cmd_breakout))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
-    app.add_handler(CommandHandler("etfs",      cmd_etfs))
+    app.add_handler(CommandHandler("etfs",        cmd_etfs))
+    app.add_handler(CommandHandler("performance", cmd_performance))
 
     # Scheduled jobs
     jq = app.job_queue
@@ -977,6 +1035,8 @@ def main():
     jq.run_daily(job_daily_open,  time=dtime(hour=9,  minute=35, tzinfo=ET))
     jq.run_daily(job_premarket_scan, time=dtime(hour=8, minute=30, tzinfo=ET))
     jq.run_daily(job_earnings_alert, time=dtime(hour=8, minute=0,  tzinfo=ET))
+    jq.run_daily(job_outcome_check,  time=dtime(hour=16, minute=30, tzinfo=ET))  # verifica señales al cierre
+    jq.run_daily(job_weekly_performance, time=dtime(hour=18, minute=0, tzinfo=ET))  # domingo (check interno)
 
     app.post_init = lambda a: send_startup_message(a)
 

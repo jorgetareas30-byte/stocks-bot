@@ -56,7 +56,10 @@ WATCHLIST_GROUPS = {
 }
 
 # Minimum score to send alert
-MIN_SCORE = 68
+# 75 per docs — was lowered to 68 for "more signals", which optimizes
+# engagement, not profitability. Raise it back; /performance will tell
+# us with data if it should move.
+MIN_SCORE = 75
 
 # Scan schedule (market hours ET)
 SCAN_INTERVAL_MINUTES = 60   # Scan every hour during market hours
